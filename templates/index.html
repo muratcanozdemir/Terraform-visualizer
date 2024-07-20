@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Terraform Resource Lineage</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #444;
+        }
+        #form-container {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+        }
+        button, input[type="submit"] {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px 0;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover, input[type="submit"]:hover {
+            background: #0056b3;
+        }
+        input[type="file"], input[type="text"] {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 20px;
+            border: 1px solid #ddd;
+            width: calc(100% - 22px);
+        }
+        svg {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            background: #fff;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+</head>
+<body>
+    <div id="form-container">
+        <h1>Choose State Loading Method</h1>
+        <button id="local-btn">Upload Local State File</button>
+        <button id="s3-btn">Load State from S3</button>
+        
+        <div id="local-form" class="hidden">
+            <h2>Upload Terraform State File</h2>
+            <form action="/upload_state" enctype="multipart/form-data" method="post">
+                <input type="file" name="file">
+                <input type="submit" value="Upload">
+            </form>
+        </div>
+        
+        <div id="s3-form" class="hidden">
+            <h2>Load Terraform State from S3</h2>
+            <form id="state-form">
+                <label for="repo_name">Repository Name:</label>
+                <input type="text" id="repo_name" name="repo_name" required>
+                <label for="environment">Environment:</label>
+                <input type="text" id="environment" name="environment" required>
+                <button type="submit">Load Terraform State</button>
+            </form>
+        </div>
+    </div>
+    
+    <svg width="960" height="600"></svg>
+    
+    <script>
+        const width = 960;
+        const height = 600;
+
+        const svg = d3.select("svg")
+            .attr("width", width)
+            .attr("height", height);
+
+        document.getElementById('local-btn').addEventListener('click', () => {
+            document.getElementById('local-form').classList.remove('hidden');
+            document.getElementById('s3-form').classList.add('hidden');
+        });
+
+        document.getElementById('s3-btn').addEventListener('click', () => {
+            document.getElementById('s3-form').classList.remove('hidden');
+            document.getElementById('local-form').classList.add('hidden');
+        });
+
+        document.getElementById('state-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const repo_name = document.getElementById('repo_name').value;
+            const environment = document.getElementById('environment').value;
+
+            fetch(`/load_state`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ repo_name, environment })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const initialResourceId = data.initial_resource_id;
+                    fetchLineageAndUpdateGraph(initialResourceId);
+                } else {
+                    alert('Failed to load state: ' + data.message);
+                }
+            });
+        });
+
+        function fetchLineageAndUpdateGraph(resourceId) {
+            fetch(`/lineage/${resourceId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const graph = buildGraph(data);
+                    drawGraph(graph);
+                });
+        }
+
+        function buildGraph(lineage) {
+            const nodes = new Set();
+            const links = [];
+
+            lineage.ancestors.forEach((resource, i, array) => {
+                nodes.add(resource);
+                if (i > 0) {
+                    links.push({source: array[i - 1], target: resource});
+                }
+            });
+
+            lineage.descendants.forEach(resource => {
+                nodes.add(resource);
+                links.push({source: lineage.ancestors[0], target: resource});
+            });
+
+            return {
+                nodes: Array.from(nodes).map(id => ({id})),
+                links
+            };
+        }
+
+        function drawGraph(graph) {
+            svg.selectAll("*").remove();  // Clear the existing SVG content
+
+            const simulation = d3.forceSimulation(graph.nodes)
+                .force("link", d3.forceLink(graph.links).id(d => d.id).distance(100))
+                .force("charge", d3.forceManyBody().strength(-300))
+                .force("center", d3.forceCenter(width / 2, height / 2));
+
+            const link = svg.append("g")
+                .attr("class", "links")
+                .selectAll("line")
+                .data(graph.links)
+                .enter().append("line")
+                .attr("class", "link");
+
+            const node = svg.append("g")
+                .attr("class", "nodes")
+                .selectAll("circle")
+                .data(graph.nodes)
+                .enter().append("circle")
+                .attr("class", "node")
+                .attr("r", 10)
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            node.append("title")
+                .text(d => d.id);
+
+            node.on("mouseover", function(event, d) {
+                fetchLineageAndUpdateGraph(d.id);
+            });
+
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+            });
+
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+        }
+
+        // Initial load with a default resource ID
+        const initialResourceId = 'your_initial_resource_id_here';  // Replace with the initial resource ID to visualize
+        fetchLineageAndUpdateGraph(initialResourceId);
+    </script>
+</body>
+</html>

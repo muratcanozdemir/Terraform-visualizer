@@ -1,0 +1,10 @@
+vpc_id             = "vpc-xxxxxxxx"
+private_subnet_ids = ["subnet-xxxxxxxx", "subnet-yyyyyyyy"]
+docker_image       = "your_docker_image_uri"
+aws_region         = "eu-central-1"
+ecs_cluster_name   = "my-cluster"
+service_name       = visualizer
+task_memory        = 1024
+task_cpu           = 1024
+domain_name        = "bion.tech"
+hosted_zone_id     = "dsf23412AC"
